@@ -1,3 +1,9 @@
+"""
+CausalNF Lightning Module
+
+This module contains the PyTorch Lightning wrapper for Causal Normalizing Flows.
+"""
+
 import os
 import time
 
@@ -18,7 +24,11 @@ from causal_nf.modules.causal_nf import CausalNormalizingFlow
 import numpy as np
 
 
-class CausalNFightning(BaseLightning):
+class CausalNFLightning(BaseLightning):
+    """
+    PyTorch Lightning module for Causal Normalizing Flows.
+    """
+    
     def __init__(
         self,
         preparator,
@@ -28,7 +38,7 @@ class CausalNFightning(BaseLightning):
         regularize=False,
         kl="forward",
     ):
-        super(CausalNFightning, self).__init__(preparator, init_fn=init_fn)
+        super(CausalNFLightning, self).__init__(preparator, init_fn=init_fn)
 
         self.model = model
         self.plot = plot
@@ -39,7 +49,7 @@ class CausalNFightning(BaseLightning):
         self.reset_parameters()
 
     def reset_parameters(self):
-        super(CausalNFightning, self).reset_parameters()
+        super(CausalNFLightning, self).reset_parameters()
 
     def set_input_scaler(self):
         self.input_scaler = self.preparator.get_scaler(fit=True)
@@ -48,7 +58,6 @@ class CausalNFightning(BaseLightning):
 
     def get_x_norm(self, batch, batch_size=None):
         x_norm = self.input_scaler.transform(batch[0].to(self.device), inplace=False)
-
         return x_norm
 
     def forward(self, batch, **kwargs):
@@ -133,7 +142,6 @@ class CausalNFightning(BaseLightning):
                 )
                 delta_times.append(self.compute_time(tic, n))
 
-
                 if self.plot:
                     output[f"x_int_{index + 1}={name}"] = self.preparator.post_process(
                         x_int
@@ -152,6 +160,7 @@ class CausalNFightning(BaseLightning):
 
             delta_time = torch.stack(delta_times).mean()
             output["time_intervene"] = delta_time
+            
         if counterfactual:
             intervention_list = self.preparator.get_intervention_list()
             delta_times = []
@@ -213,7 +222,6 @@ class CausalNFightning(BaseLightning):
         return output
 
     def vi(self, n_samples):
-
         flow = self.model.flow()
         z = flow.base.rsample((n_samples,))
         x_norm = flow.transform.inv(z)
@@ -233,9 +241,7 @@ class CausalNFightning(BaseLightning):
 
         return output
 
-    # process inside the training loop
     def training_step(self, train_batch, batch_idx):
-
         if self.kl == "forward":
             loss_dict = self(train_batch)
         elif self.kl == "backward":
@@ -286,21 +292,15 @@ class CausalNFightning(BaseLightning):
         return log_dict
 
     def add_noise(self, x):
-        # Calculate the standard deviation of each column
         std = torch.std(x, dim=0).mul(100).round() / 100.0
 
-        # Find the columns that are constant (i.e., have a standard deviation of 0)
         constant_mask = std == 0
-        # # Generate a small amount of noise for each constant column
-        # noise = torch.rand(x.shape[0], sum(constant_mask)) * 2.0 - 1.0
         noise = torch.randn(x.shape[0], sum(constant_mask))
-        # Add the noise to the corresponding columns
         x[:, constant_mask] += noise * 0.01
         return x
 
     def compute_metrics_stats(self, outputs):
-
-        metric_stats = super(CausalNFightning, self).compute_metrics_stats(outputs)
+        metric_stats = super(CausalNFLightning, self).compute_metrics_stats(outputs)
 
         metric_stats = {
             key: value for key, value in metric_stats.items() if "x_" not in key
@@ -332,12 +332,10 @@ class CausalNFightning(BaseLightning):
             df = self.preparator.create_df([x, x_obs], ["real", "fake"])
 
             fig = self.preparator._plot_data(df=df, hue="mode")
-            # g.savefig(os.path.join(self.logger.save_dir, f'name=x_obs_model=causal_nf_epoch={self.current_epoch}.png'))
 
-            # metric_stats['x_obs_plot'] = wandb.Image(g.fig)
             try:
                 wandb.log({"x_obs": wandb.Image(fig)}, step=self.current_epoch)
-            except:
+            except Exception:
                 fig.savefig(f"{filename}x_obs.pdf")
             plt.close("all")
 
@@ -358,20 +356,17 @@ class CausalNFightning(BaseLightning):
                     fig = self.preparator._plot_data(df=df, hue="mode")
                     try:
                         wandb.log({key: wandb.Image(fig)}, step=self.current_epoch)
-                    except:
+                    except Exception:
                         fig.savefig(f"{filename}{key}.pdf")
 
                     plt.close("all")
         return metric_stats
 
     def test_step(self, batch, batch_idx):
-
         self.eval()
 
         observational = batch_idx < 1
-        # observational = False
         intervene = batch_idx < 1
-        # intervene = False
         counterfactual = batch_idx < 1
         ate = batch_idx < 1
 
@@ -386,14 +381,6 @@ class CausalNFightning(BaseLightning):
         log_dict = {}
 
         self.update_log_dict(log_dict=log_dict, my_dict=loss_dict)
-        split = self.preparator.current_split
-        # if self.plot:
-        #     filename = os.path.join(self.logger.save_dir, f"split={split}_name=jacobian_")
-        # else:
-        #     filename = None
-        # if batch_idx == 0 and split != 'train':
-        #     output = self.jacobian_losses(batch, filename=filename)
-        #     log_dict.update(output)
         return log_dict
 
     def configure_optimizers(self):
@@ -422,25 +409,19 @@ class CausalNFightning(BaseLightning):
             J = J.detach().numpy()
 
         J_abs = np.absolute(J)
-        # Create a figure and axis object
         fig, ax = plt.subplots()
 
-        # Plot the matrix using the axis object's `matshow` function
         height, width = J.shape
         fig_aspect_ratio = fig.get_figheight() / fig.get_figwidth()
         data_aspect_ratio = (height / width) * fig_aspect_ratio
-        # Plot the matrix using the axis object's `matshow` function
         cax = ax.matshow(
             J_abs, aspect=data_aspect_ratio, cmap="viridis"
-        )  # You can change the colormap to your preference
+        )
 
-        # Add a colorbar to the plot for easy interpretation
         fig.colorbar(cax)
 
-        # Set the title for the axis object
         ax.set_title(f"{title} {variable}")
 
-        # Label the x and y axes
         ax.set_xticks(range(J.shape[1]))
         ax.set_yticks(range(J.shape[0]))
 
@@ -455,7 +436,6 @@ class CausalNFightning(BaseLightning):
         ]
         ax.set_yticklabels(yticks)
 
-        # Display the values of the Jacobian matrix with 2 decimal points
         for i in range(J.shape[0]):
             for j in range(J.shape[1]):
                 value = J[i, j]
@@ -472,7 +452,6 @@ class CausalNFightning(BaseLightning):
 
         adj = self.preparator.adjacency(True)
 
-        # Create a mask for lower triangular elements
         triangular = torch.tril(torch.ones(adj.shape), diagonal=-1).bool()
 
         if isinstance(filename, str):
@@ -499,17 +478,9 @@ class CausalNFightning(BaseLightning):
 
         x_norm = self.get_x_norm(batch=batch)
         jac_x = self.model.compute_jacobian(x=x_norm)
-
-        # print(f"--------Jacobian of x--------")
-        # for jac_x_i in jac_x:
-        #     print(jac_x_i.round(2))
         sample_dict = self.model.sample((x_norm.shape[0],))
         u = sample_dict["u_obs"]
         jac_u = self.model.compute_jacobian(u=u)
-
-        # print(f"--------Jacobian of u--------")
-        # for jac_u_i in jac_u:
-        #     print(jac_u_i.round(2))
 
         if isinstance(filename, str):
             plt.close("all")

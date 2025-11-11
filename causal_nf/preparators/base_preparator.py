@@ -1,12 +1,12 @@
+import os
 import os.path
 from abc import ABC, abstractmethod
 
+import importlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torchmetrics as tm
-import wandb
 from torchlikelihoods import (
     scalers_dict,
     HeterogeneousScaler,
@@ -50,6 +50,7 @@ class BaseDatasetPreparator(ABC):
         self.datasets = None
 
         self.device = device
+        self._wandb_module = None
 
         if not os.path.exists(root):
             causal_io.makedirs(root)
@@ -239,34 +240,6 @@ class BaseDatasetPreparator(ABC):
     def compute_metrics(self, **kwargs):
         return {}
 
-        predictions_dict = {}
-        targets_dict = {}
-
-        for name, values in kwargs.items():
-            if "logits" in name:
-                pred = logits_to_hard_pred_fn(values)
-                predictions_dict[name.replace("logits", "")] = pred
-            if "target" in name:
-                targets_dict[name.replace("target", "")] = values
-
-        preds_target_provided = len(predictions_dict) > 0 and len(targets_dict) > 0
-        metric_names = self._metric_names()
-        metrics = {}
-
-        if "mae" in metric_names and preds_target_provided:
-            raise NotImplementedError
-            mae = tm.MeanAbsoluteError()
-            value = mae(preds=logits, target=target)
-            metrics["mae"] = value
-            if "logits_recursive" in kwargs:
-                logits_recursive = kwargs["logits_recursive"]
-                target_recursive = kwargs["target_recursive"]
-                value_2 = mae(preds=logits_recursive, target=target_recursive)
-                metrics["mae_recursive"] = value_2
-
-        metrics = {key: value.item() for key, value in metrics.items()}
-        return metrics
-
     def get_ckpt_name(self, ckpt_file):
         ckpt_name = os.path.splitext(os.path.basename(ckpt_file))[0]
         if "epoch" in ckpt_name:
@@ -370,19 +343,41 @@ class BaseDatasetPreparator(ABC):
 
         if os.path.exists(full_filaname):
             causal_io.print_warning(f"Overwriting file: {full_filaname}")
+        wandb_module = self._get_wandb()
         if isinstance(fig, torch.Tensor):
             save_image(fig, full_filaname)
-            try:
-                image = wandb.Image(fig)
-                wandb.log({f"figures/{name}": image})
-            except:
-                causal_io.print_warning(f"wandb not ready to plot image")
+            if wandb_module is not None:
+                try:
+                    image = wandb_module.Image(fig)
+                    wandb_module.log({f"figures/{name}": image})
+                except Exception:
+                    causal_io.print_warning("wandb not ready to plot image")
         else:
-            try:
-                wandb.log({f"figures/{name}": wandb.Image(fig)})
-            except:
-                causal_io.print_warning(f"wandb not ready to plot figure")
+            if wandb_module is not None:
+                try:
+                    wandb_module.log({f"figures/{name}": wandb_module.Image(fig)})
+                except Exception:
+                    causal_io.print_warning("wandb not ready to plot figure")
             fig.savefig(full_filaname)
+
+    def _get_wandb(self):
+        if self._wandb_module is False:
+            return None
+        if self._wandb_module is None:
+            disable = os.environ.get("CAUSAL_NF_DISABLE_WANDB", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if disable:
+                self._wandb_module = False
+                return None
+            spec = importlib.util.find_spec("wandb")
+            if spec is None:
+                self._wandb_module = False
+                return None
+            self._wandb_module = importlib.import_module("wandb")
+        return self._wandb_module
 
     def add_title(self, title_el, ax):
 

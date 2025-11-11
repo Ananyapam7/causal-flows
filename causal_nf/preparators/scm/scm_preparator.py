@@ -205,13 +205,13 @@ class SCMPreparator(TabularPreparator):
 
     def diameter(self):
         adjacency = self.adjacency(True).numpy()
-        G = nx.from_numpy_matrix(adjacency, create_using=nx.Graph)
+        G = nx.from_numpy_array(adjacency, create_using=nx.Graph)
         diameter = nx.diameter(G)
         return diameter
 
     def longest_path_length(self):
         adjacency = self.adjacency(False).numpy()
-        G = nx.from_numpy_matrix(adjacency, create_using=nx.DiGraph)
+        G = nx.from_numpy_array(adjacency, create_using=nx.DiGraph)
         longest_path_length = nx.algorithms.dag.dag_longest_path_length(G)
         return int(longest_path_length)
 

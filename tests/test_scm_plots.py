@@ -1,8 +1,17 @@
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pytest
-from tueplots import bundles
+
+tueplots = pytest.importorskip("tueplots")
+if hasattr(tueplots, "bundles"):
+    bundles = tueplots.bundles
+else:
+    bundles = pytest.importorskip("tueplots.bundles")
 
 from causal_nf.sem_equations import sem_dict
 
@@ -15,7 +24,7 @@ def plot(sem_fn, name, extra=""):
     adj_matrix = sem_fn.adjacency().T
 
     # Create a graph object from the adjacency matrix
-    G = nx.from_numpy_matrix(np.array(adj_matrix), create_using=nx.DiGraph)
+    G = nx.from_numpy_array(np.array(adj_matrix), create_using=nx.DiGraph)
 
     # Customize the appearance of the graph
     # pos = nx.spring_layout(G, seed=42, k=0.5)  # Use a fixed seed for reproducibility
@@ -35,7 +44,9 @@ def plot(sem_fn, name, extra=""):
     node_labels = {i: f"$x_{i + 1}$" for i in range(len(adj_matrix))}
 
     # Plot the graph
-    fig, ax = plt.subplots(figsize=bundles.icml2022()["figure.figsize"])
+    fig, ax = plt.subplots(
+        figsize=bundles.icml2022()["figure.figsize"], layout="tight"
+    )
 
     nx.draw(
         G,
@@ -63,7 +74,6 @@ def plot(sem_fn, name, extra=""):
     # Customize the appearance of the plot
     ax.axis("off")
     ax.margins(0.2)  # Add padding to prevent cutting off elements
-    plt.tight_layout()
     plt.savefig(f"images/{name}_graph{extra}.png", dpi=300, bbox_inches="tight")
     plt.close("all")
 

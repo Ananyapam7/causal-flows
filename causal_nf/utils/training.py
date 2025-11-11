@@ -7,10 +7,14 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 import causal_nf.utils.io as causal_io
 import zuko.flows as zflows
-from causal_nf.models.causal_nf import CausalNFightning
+from causal_nf.models.causal_nf import CausalNFLightning
+from causal_nf.models.causal_ctm import CausalCTMLightning
 from causal_nf.models.vaca import VACALightning
 from causal_nf.modules import module_dict
+from causal_nf.modules.causal_ctm_nodewise_builder import build_nodewise_ctm_flows
 from causal_nf.modules.causal_nf import CausalNormalizingFlow
+from causal_nf.modules.causal_ctm_joint import CausalCTMJoint
+from causal_nf.modules.causal_ctm_nodewise import CausalCTM as CausalCTMNodewise
 from causal_nf.modules.vaca import VACA
 from causal_nf.utils.init import get_init_fn
 
@@ -42,6 +46,8 @@ def _load(ckpt_file, Model, **model_args):
 def load_model(cfg, preparator, ckpt_file=None):
     if cfg.model.name in ["causal_nf", "carefl"]:
         model = load_normalizing_flow(cfg, preparator, ckpt_file=ckpt_file)
+    elif cfg.model.name == "causal_ctm":
+        model = load_causal_ctm(cfg, preparator, ckpt_file=ckpt_file)
     elif cfg.model.name == "vaca":
         model = load_vaca(cfg, preparator, ckpt_file=ckpt_file)
     else:
@@ -204,13 +210,137 @@ def load_normalizing_flow(cfg, preparator, ckpt_file=None):
 
     model = _load(
         ckpt_file=ckpt_file,
-        Model=CausalNFightning,
+        Model=CausalNFLightning,
         preparator=preparator,
         model=module,
         init_fn=init_fn,
         plot=cfg.model.plot,
         regularize=cfg.train.regularize,
         kl=cfg.train.kl,
+    )
+
+    model.set_optim_config(cfg.optim)
+    return model
+
+
+def load_causal_ctm(cfg, preparator, ckpt_file=None):
+    init_fn = get_init_fn(cfg_model=cfg.model)
+    dim_y = preparator.x_dim()
+    context_dim = getattr(cfg.model, "context_dim", 0)
+    use_nodewise = getattr(cfg.model, "use_nodewise", False)
+
+    if use_nodewise:
+        adjacency = preparator.adjacency()
+        node_cfg = getattr(cfg.model, "nodewise_flow", {})
+
+        # Determine flow class
+        flow_cls_name = node_cfg.get("cls", "nsf")
+        flow_cls_name_upper = flow_cls_name.upper()
+        try:
+            flow_cls = getattr(zflows, flow_cls_name_upper)
+        except AttributeError as err:
+            raise ValueError(
+                f"Unknown node-wise flow class '{flow_cls_name}'. "
+                f"Available zuko flow classes include NSF, MAF, NAF, UNAF."
+            ) from err
+
+        # Flow kwargs (defaults suitable for NSF)
+        default_kwargs = dict(bins=8, transforms=3, hidden_features=(64, 64))
+        cfg_kwargs = node_cfg.get("kwargs", {})
+        if "hidden_features" in node_cfg:
+            cfg_kwargs.setdefault("hidden_features", tuple(node_cfg["hidden_features"]))
+        for key, value in node_cfg.items():
+            if key in {"bins", "transforms", "hidden_features"}:
+                cfg_kwargs.setdefault(key, value)
+        flow_kwargs = {**default_kwargs, **cfg_kwargs}
+        if isinstance(flow_kwargs.get("hidden_features"), list):
+            flow_kwargs["hidden_features"] = tuple(flow_kwargs["hidden_features"])
+
+        node_flows = build_nodewise_ctm_flows(
+            adjacency=adjacency,
+            context_dim_ext=context_dim,
+            flow_cls=flow_cls,
+            flow_kwargs=flow_kwargs,
+        )
+
+        module = CausalCTMNodewise(
+            node_flows=node_flows,
+            context_dim_ext=context_dim,
+        )
+        module.set_adjacency(adjacency)
+    else:
+        flow_name = cfg.model.layer_name
+        hidden_features = cfg.model.dim_inner
+
+        if cfg.model.num_layers == -1:
+            num_layers = preparator.longest_path_length()
+        elif cfg.model.num_layers == 0:
+            num_layers = preparator.diameter()
+        else:
+            num_layers = cfg.model.num_layers
+
+        base_to_data = cfg.model.base_to_data
+        activation = cfg.model.act
+        adjacency = preparator.adjacency() if cfg.model.adjacency else None
+        base_distr = cfg.model.base_distr
+        learn_base = cfg.model.learn_base
+
+        activation = {
+            "relu": torch.nn.ReLU,
+            "elu": torch.nn.ELU,
+            "lrelu": torch.nn.LeakyReLU,
+            "sigmoid": torch.nn.Sigmoid,
+        }[activation]
+
+        if flow_name == "maf":
+            flow = zflows.MAF(
+                dim_y,
+                context=context_dim,
+                transforms=num_layers,
+                hidden_features=hidden_features,
+                adjacency=adjacency,
+                base_to_data=base_to_data,
+                base_distr=base_distr,
+                learn_base=learn_base,
+                activation=activation,
+            )
+        elif flow_name == "nsf":
+            flow = zflows.NSF(
+                dim_y,
+                context=context_dim,
+                transforms=num_layers,
+                hidden_features=hidden_features,
+                adjacency=adjacency,
+                base_to_data=base_to_data,
+                base_distr=base_distr,
+                learn_base=learn_base,
+                activation=activation,
+            )
+        elif flow_name == "naf":
+            flow = zflows.NAF(
+                features=dim_y,
+                context=context_dim,
+                transforms=num_layers,
+                hidden_features=hidden_features,
+                randperm=False,
+                activation=activation,
+            )
+        else:
+            raise NotImplementedError(f"Flow {flow_name} not implemented for CTM")
+
+        print(flow)
+        module = CausalCTMJoint(flow=flow, context_dim=context_dim)
+
+    model = _load(
+        ckpt_file=ckpt_file,
+        Model=CausalCTMLightning,
+        preparator=preparator,
+        model=module,
+        context_dim=context_dim,
+        init_fn=init_fn,
+        plot=cfg.model.plot,
+        regularize=cfg.train.regularize,
+        use_nodewise=use_nodewise,
     )
 
     model.set_optim_config(cfg.optim)

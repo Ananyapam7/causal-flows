@@ -21,6 +21,7 @@ model:
   name: causal_nf
   layer_name: maf
   net_name: mlp
+  use_nodewise: False
   dim_inner: [64]
   num_layers: 2
   init: None
@@ -42,6 +43,13 @@ model:
   beta: 1.0
   distr_x: normal
   lambda_: 0.01
+  context_dim: 0
+  nodewise_flow:
+    cls: nsf
+    kwargs:
+      bins: 8
+      transforms: 3
+      hidden_features: [64, 64]
 gnn:
   num_layers_pre: 1
   num_layers: 1
